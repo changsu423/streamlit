@@ -1,56 +1,80 @@
 import streamlit as st
-from pdf2image import convert_from_bytes
+import fitz  # PyMuPDF
 from pptx import Presentation
 from pptx.util import Inches
+from tqdm import tqdm
 from io import BytesIO
+from PIL import Image
 import os
 
-# Streamlit App Title
-st.title("PDF를 이미지로 변환하여 PPTX로 저장하기 📄➡️📽️")
-st.write("PDF 파일을 업로드하면 각 페이지를 이미지로 변환하고, 이를 PPTX 파일로 만들어 다운로드할 수 있어요! 😊")
+# Streamlit UI
+st.title("PDF to PPTX Converter(by 석리송)")
+st.write("Upload a PDF file to convert each page to a slide in a PPTX file.")
 
-# PDF 파일 업로드
-uploaded_pdf = st.file_uploader("PDF 파일을 업로드 해주세요.", type=["pdf"])
+# File uploader
+uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
-if uploaded_pdf is not None:
-    # PDF를 BytesIO로 읽기
-    pdf_bytes = uploaded_pdf.read()
-    st.info("PDF 파일을 이미지로 변환하는 중입니다. 잠시만 기다려주세요... 🕒")
-    
-    # PDF를 이미지로 변환
-    images = convert_from_bytes(pdf_bytes)
-    st.success(f"PDF에서 {len(images)} 페이지를 이미지로 변환했어요! 🎉")
-    
-    # PPTX 파일 생성
-    prs = Presentation()
-    blank_slide_layout = prs.slide_layouts[6]  # 빈 슬라이드 레이아웃
-    
-    for i, image in enumerate(images):
-        slide = prs.slides.add_slide(blank_slide_layout)
-        image_stream = BytesIO()
-        image.save(image_stream, format="PNG")
-        image_size = image.size  # 이미지 사이즈 (width, height)
-        width_in_inches = image_size[0] / 96  # 이미지 너비를 인치로 변환 (96 dpi 기준)
-        height_in_inches = image_size[1] / 96  # 이미지 높이를 인치로 변환
+# Convert PDF to PPTX
+def convert_pdf_to_pptx(pdf_data, output_filename):
+    pdf_document = fitz.open("pdf", pdf_data)
+    presentation = Presentation()
+
+    for page_num in tqdm(range(len(pdf_document)), desc="Converting PDF to PPTX"):
+        page = pdf_document.load_page(page_num)
         
-        # 이미지 삽입
-        slide.shapes.add_picture(image_stream, Inches(0), Inches(0), width=Inches(width_in_inches), height=Inches(height_in_inches))
-        st.write(f"페이지 {i+1} 변환 완료! 🖼️")
+        # 페이지 크기 가져오기 (인치 단위로 변환)
+        page_width = Inches(page.rect.width / 72)  # 1인치 = 72pt
+        page_height = Inches(page.rect.height / 72)
+        
+        # 슬라이드 크기 설정
+        presentation.slide_width = page_width
+        presentation.slide_height = page_height
+        
+        # PDF 페이지를 이미지로 렌더링
+        pix = page.get_pixmap()
+        image = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        
+        # 슬라이드 추가 및 이미지 배치
+        slide = presentation.slides.add_slide(presentation.slide_layouts[5])  # 빈 슬라이드 레이아웃
+        
+        image_width, image_height = image.size
+        aspect_ratio = image_width / image_height
+
+        if page_width / page_height > aspect_ratio:
+            new_height = page_height
+            new_width = new_height * aspect_ratio
+        else:
+            new_width = page_width
+            new_height = new_width / aspect_ratio
+
+        left = (page_width - new_width) / 2
+        top = (page_height - new_height) / 2
+        
+        # 이미지를 슬라이드에 추가
+        image_bytes = BytesIO()
+        image.save(image_bytes, format="PNG")
+        image_bytes.seek(0)
+        slide.shapes.add_picture(image_bytes, left, top, width=new_width, height=new_height)
     
-    # PPTX 파일 저장
-    pptx_bytes = BytesIO()
-    prs.save(pptx_bytes)
-    pptx_bytes.seek(0)
+    # 프레젠테이션을 BytesIO에 저장하여 반환
+    pptx_data = BytesIO()
+    presentation.save(pptx_data)
+    pptx_data.seek(0)
+    return pptx_data
+
+# Process PDF and provide download link
+if uploaded_file is not None:
+    # PDF 파일 이름에서 확장자를 제외하고 PPTX 파일 이름 생성
+    output_filename = os.path.splitext(uploaded_file.name)[0] + ".pptx"
     
-    # 다운로드 버튼 제공
-    st.success("모든 페이지를 PPTX 파일로 변환했어요! 🎯")
+    st.write("Converting PDF to PPTX, please wait...")
+    pptx_data = convert_pdf_to_pptx(uploaded_file.read(), output_filename)
+    st.success("Conversion completed!")
+
+    # Provide download link for PPTX
     st.download_button(
-        label="PPTX 파일 다운로드 ⬇️",
-        data=pptx_bytes,
-        file_name="converted_presentation.pptx",
+        label="Download PPTX file",
+        data=pptx_data,
+        file_name=output_filename,
         mime="application/vnd.openxmlformats-officedocument.presentationml.presentation"
     )
-else:
-    st.warning("PDF 파일을 업로드해주세요! ☝️")
-
-st.write("이 도구는 PDF의 각 페이지를 이미지로 변환하여 PPTX 파일로 저장해줍니다. 변환된 PPTX 파일은 페이지 크기에 맞게 조정됩니다! 🚀")
